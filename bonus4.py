@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -48,23 +49,20 @@ class RNN():
         self.c = weights[3]
         self.b = weights[4]
 
-INPUT_FILE='goblet_book.txt'
-
-def read_data(file_path):
-    """
-
-    :param file_path: path of the input file
-    :return: an array of characters and associated indices, and all the characters in the book
-    """
-
-    with open(file_path,"r") as input:
-        data=input.read()
-
-    chars=list(set(data))
-    chars.sort()
-    indices=np.arange(len(chars))
-    char_and_ind=np.asarray(list(zip(chars,indices)))
-    return char_and_ind,data
+def load_tweets(fname):
+    with open(fname) as f:
+        data=json.load(f)
+        tweets=[]
+        chars=''
+        for tweet in data:
+            text=tweet['text']
+            chars+=text
+            tweets.append(text)
+        chars = list(set(chars))
+        chars.sort()
+        indices = np.arange(len(chars))
+        char_and_ind = np.asarray(list(zip(chars, indices)))
+    return char_and_ind,tweets
 
 def generate_chars(chars_with_indices,alph_size,first_char,rnn,n,h_0):
     """
@@ -256,13 +254,13 @@ def clip_gradients(grad_list):
         #grad_list[g]=np.maximum(np.minimum(grad_list[g],5),-5)
     return grad_list
 
-def train(rnn,oh_book, seq_length, chars_with_indices, alph_size, hidden_size,n_epochs,lr):
+def train(rnn,oh_tweets, seq_length, chars_with_indices, alph_size, hidden_size,n_epochs,lr):
 
-    book_length=np.shape(oh_book)[1]
+    max_lenght=140
     h_prev = np.zeros((hidden_size, 1))
-    e=np.random.randint(0,len(book_data)-seq_length)
-    X = oh_book[:,e:e+seq_length]
-    Y = oh_book[:,e + 1:e + seq_length + 1]
+    e=np.random.randint(0,max_lenght-seq_length)
+    X = oh_tweets[0][:,e:e+seq_length]
+    Y = oh_tweets[0][:,e + 1:e + seq_length + 1]
     smooth_loss =compute_loss(X,rnn,Y,h_prev)[0]
 
     smooth_loss_plot=[]
@@ -273,61 +271,69 @@ def train(rnn,oh_book, seq_length, chars_with_indices, alph_size, hidden_size,n_
 
     for epoch in range(n_epochs):
         print(epoch)
-        h_prev = np.zeros_like(h_prev)
-        e=0 # chars read so far
-        while e< book_length-seq_length:
+        for tweet in oh_tweets:
+            end=False
+            h_prev = np.zeros_like(h_prev)
+            e=0 # chars read so far
+            tweet_length=np.shape(tweet)[1]
+            if tweet_length>max_lenght:
+                tweet_length=max_lenght
+            max_e=tweet_length-seq_length-1
+            while e< tweet_length:
+                if e >= max_e:
+                    X = tweet[:, e: tweet_length-1]
+                    Y = tweet[:, e + 1:tweet_length]
+                    end=True
+                else:
+                    X = tweet[:, e:e + seq_length]
+                    Y = tweet[:, e + 1:e + seq_length + 1]
 
-            X = oh_book[:, e:e + seq_length]
-            Y = oh_book[:, e + 1:e + seq_length + 1]
+                gradients,loss,h_prev=compute_gradients(X,Y,rnn,h_prev)
+                gradients=clip_gradients(gradients)
+                for i in range(len(gradients)):
+                    momentums[i]=momentums[i]+(gradients[i])**2
+                    weights[i]=weights[i]-((lr)/(np.sqrt(momentums[i]+1e-6))*gradients[i])
 
-            gradients,loss,h_prev=compute_gradients(X,Y,rnn,h_prev)
-            gradients=clip_gradients(gradients)
-            for i in range(len(gradients)):
-                momentums[i]=momentums[i]+(gradients[i])**2
-                weights[i]=weights[i]-((lr)/(np.sqrt(momentums[i]+1e-6))*gradients[i])
+                rnn.update(weights)
+                smooth_loss=0.999*smooth_loss+0.001*loss
 
-            rnn.update(weights)
-            smooth_loss=0.999*smooth_loss+0.001*loss
-
-            if iterations%100==0:
-                smooth_loss_plot.append(smooth_loss)
-            if iterations%1000==0:
-                print(iterations)
-                print(smooth_loss)
-            if iterations%10000==0:
-                my_string = generate_chars(chars_with_indices, alph_size, char_from_index(chars_with_indices,np.argwhere(X[:,-1]==1)[0][0]), rnn, 200, h_prev)
-                print(my_string)
-            e = e + seq_length
-            iterations += 1
+                if iterations%100==0:
+                    smooth_loss_plot.append(smooth_loss)
+                if iterations%1000==0:
+                    print(iterations)
+                    print(smooth_loss)
+                if iterations%10000==0:
+                    my_string = generate_chars(chars_with_indices, alph_size, char_from_index(chars_with_indices,np.argwhere(X[:,-1]==1)[0][0]), rnn, 140, h_prev)
+                    print(my_string)
+                e = e + seq_length
+                iterations += 1
+                if end:
+                    break
 
     plt.plot(smooth_loss_plot)
 
-    my_string = generate_chars(chars_with_indices, alph_size, 'R', rnn, 1000,
+    my_string = generate_chars(chars_with_indices, alph_size, 'R', rnn, 140,
                                h_prev)
     print(my_string)
     plt.show()
+
+
+INPUT='condensed_2016.json'
 
 
 h=1e-4# for numerical gradients
 
 m=100 #dimensionality of the hidden state
 seq_length=25 #length of the input sequence
-chars_with_indices,book_data=read_data(INPUT_FILE)
+chars_with_indices,tweets=load_tweets(INPUT)
 K=np.size(chars_with_indices[:,0]) #alphabet size
 lr=0.1
 
 np.random.seed(100)
 rnn=RNN(m,K)
 
-oh_book=seq_to_ohm(K,book_data,chars_with_indices)
+oh_tweets=[]
+for tweet in tweets:
+    oh_tweets.append(seq_to_ohm(K,tweet,chars_with_indices))
 
-#UNCOMMENT TO TEST GRADIENTS
-"""h_0=np.zeros((m,1))
-
-loss=compute_loss(X,rnn,Y,h_0)
-gradients_num=compute_grad_num_slow(X,Y,rnn,h,h_0)
-gradients=compute_gradients(X,Y,rnn,h_0)
-gradients_good=[]
-for g in range(len(gradients[0])):
-    gradients_good.append(check_grad(gradients[0][g], gradients_num[g],1e-6))"""
-train(rnn,oh_book,seq_length,chars_with_indices,K,m,20,lr)
+train(rnn,oh_tweets,seq_length,chars_with_indices,K,m,20,lr)
